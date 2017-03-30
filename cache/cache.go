@@ -63,15 +63,16 @@ func (c *Cache) generateItem(key string, item *cacheItem, generate func(string) 
 	val, err := generate(key)
 	item.mutex.Lock()
 	defer item.mutex.Unlock()
-	item.val, item.err = val, err
-	if item.err != nil || item.ttl == 0 {
+	if err == nil || item.refresh == nil { // Only propogate errors if this isn't a refresh
+		item.val, item.err = val, err
+	}
+	if item.refresh == nil && (item.err != nil || item.ttl == 0) {
 		c.lockMap()
 		delete(c.data, key) // Don't allow anything else to use this error/instant result
 		c.mutex.Unlock()
 	}
 	item.created = time.Now()
-	item.future = future // Force promote this channel to future
-	item.refresh = nil   // Clear out a refresh channel if there is one
+	item.refresh = nil // Clear out a refresh channel if there is one
 	close(future)
 }
 
@@ -124,7 +125,7 @@ func (c *Cache) Get(key string, ttl time.Duration, generate func(string) (interf
 			close(resultWait)
 			return
 		}
-		if item.shouldRefresh() {
+		if item.shouldRefresh() && item.refresh == nil {
 			refresh := make(chan bool)
 			item.refresh = refresh
 			go c.generateItem(key, item, generate, refresh)
