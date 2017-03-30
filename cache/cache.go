@@ -1,3 +1,10 @@
+/*
+Package cache implements a cache which collaborates on concurrent calculations of the same hash key to reduce time spent calculating expensive values.
+
+The Cache.Get() method ensures that at most one goroutine is calculating a specific key value at any time.
+It also ensures that frequently accessed values are recalculated before their expiration time.
+It does this by creating a cacheItem which contains a wait condition on the value completion only if one does not already exist.
+*/
 package cache
 
 import (
@@ -83,6 +90,9 @@ func (c *Cache) lockMap() {
 //
 // If the cache entry is half way through its TTL a new goroutine will be spawned at the time of retrieval,
 // though the current cached values will be returned immediately.
+//
+// Expiration/Refresh conditions are evaluated immediately upon calling Get(),
+// the retrieval function returns the cache query as it was evaluated during the Get operation.
 func (c *Cache) Get(key string, ttl time.Duration, generate func(string) (interface{}, error)) func() (interface{}, error) {
 	c.lockMap()
 	item, ok := c.data[key]
@@ -94,7 +104,10 @@ func (c *Cache) Get(key string, ttl time.Duration, generate func(string) (interf
 		go c.generateItem(key, item, generate, future)
 	}
 	c.mutex.Unlock()
-	return func() (interface{}, error) {
+	var result interface{}
+	var resErr error
+	resultWait := make(chan bool)
+	go func() {
 		<-item.future
 		item.mutex.Lock()
 		if item.expired() {
@@ -107,7 +120,9 @@ func (c *Cache) Get(key string, ttl time.Duration, generate func(string) (interf
 				}
 			}
 			item.mutex.Unlock()
-			return c.Get(key, ttl, generate)()
+			result, resErr = c.Get(key, ttl, generate)()
+			close(resultWait)
+			return
 		}
 		if item.shouldRefresh() {
 			refresh := make(chan bool)
@@ -117,7 +132,12 @@ func (c *Cache) Get(key string, ttl time.Duration, generate func(string) (interf
 		item.ttl = ttl
 		item.lastUsed = time.Now()
 		item.mutex.Unlock()
-		return item.val, item.err
+		result, resErr = item.val, item.err
+		close(resultWait)
+	}()
+	return func() (interface{}, error) {
+		<-resultWait
+		return result, resErr
 	}
 }
 
