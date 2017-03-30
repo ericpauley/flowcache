@@ -32,13 +32,13 @@ func (item *cacheItem) shouldRefresh() bool {
 // Cache implements a cache
 type Cache struct {
 	data    map[string]*cacheItem
-	maxSize int
+	MaxSize int
 	mutex   sync.Mutex
 }
 
-// prune removes LRU elements from the cache until its size is newSize
-func (c *Cache) prune(newSize int) {
-	for len(c.data) > newSize {
+// Prune removes LRU elements from the cache until it has room for one new element
+func (c *Cache) Prune() {
+	for len(c.data) >= c.MaxSize {
 		checked := 0
 		var candidateKey string
 		for k, v := range c.data {
@@ -63,7 +63,7 @@ func (c *Cache) generateItem(key string, item *cacheItem, generate func(string) 
 	defer item.mutex.Unlock()
 	item.val, item.err = val, err
 	if item.err != nil || item.ttl == 0 {
-		c.mutex.Lock()
+		c.lockMap()
 		delete(c.data, key) // Don't allow anything else to use this error/instant result
 		c.mutex.Unlock()
 	}
@@ -71,6 +71,13 @@ func (c *Cache) generateItem(key string, item *cacheItem, generate func(string) 
 	item.future = future // Force promote this channel to future
 	item.refresh = nil   // Clear out a refresh channel if there is one
 	close(future)
+}
+
+func (c *Cache) lockMap() {
+	c.mutex.Lock()
+	if c.data == nil {
+		c.data = make(map[string]*cacheItem)
+	}
 }
 
 // Get begins the process of fetching a specific cache item.
@@ -82,12 +89,12 @@ func (c *Cache) generateItem(key string, item *cacheItem, generate func(string) 
 // If the cache entry is half way through its TTL a new goroutine will be spawned at the time of retrieval,
 // though the current cached values will be returned immediately.
 func (c *Cache) Get(key string, ttl time.Duration, generate func(string) (interface{}, error)) func() (interface{}, error) {
-	c.mutex.Lock()
+	c.lockMap()
 	item, ok := c.data[key]
 	if !ok {
 		future := make(chan bool)
 		item = &cacheItem{val: nil, future: future, ttl: ttl}
-		c.prune(c.maxSize - 1)
+		c.Prune()
 		c.data[key] = item
 		go c.generateItem(key, item, generate, future)
 	}
@@ -99,7 +106,7 @@ func (c *Cache) Get(key string, ttl time.Duration, generate func(string) (interf
 			if item.future != nil { // The item hasn't already been destroyed
 				item.future, item.refresh = item.refresh, nil // Atempt to promote the refresh routine to main provider
 				if item.future == nil {                       // There is no valid refresh routine
-					c.mutex.Lock()
+					c.lockMap()
 					delete(c.data, key)
 					c.mutex.Unlock()
 				}
@@ -121,7 +128,7 @@ func (c *Cache) Get(key string, ttl time.Duration, generate func(string) (interf
 
 // Purge finds and removes all expired cache entires from the cache, allowing the data to be freed by the garbage collector.
 func (c *Cache) Purge() {
-	c.mutex.Lock()
+	c.lockMap()
 	defer c.mutex.Unlock()
 	for key, val := range c.data {
 		if val.expired() {
@@ -133,19 +140,4 @@ func (c *Cache) Purge() {
 // Size returns the number of cache entires (including unpurged expired entries) in the cache.
 func (c *Cache) Size() int {
 	return len(c.data)
-}
-
-// Resize updates the maxSize of the cache.
-func (c *Cache) Resize(new int) (old int) {
-	old = c.maxSize
-	if new != 0 {
-		c.maxSize = new
-	}
-	c.prune(new) // Immediately prune the cache to fit into the provided size.
-	return
-}
-
-// NewCache creates a new cache of size maxSize
-func NewCache(maxSize int) *Cache {
-	return &Cache{data: make(map[string]*cacheItem), maxSize: maxSize}
 }

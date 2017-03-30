@@ -34,15 +34,18 @@ func setCacheValue(t *testing.T, c *Cache, key string, ttl time.Duration, val st
 
 // TestCacheStorage tests that the cache actually stores a value for a key. It gets an item then gets it again using a different generator.
 func TestCacheStorage(t *testing.T) {
-	c := NewCache(1)
+	c := &Cache{MaxSize: 1}
 	ttl := 100 * time.Second
 	expectCacheValue(t, c, "test", ttl, "A", "A", "Key generator did not get called correctly.")
 	expectCacheValue(t, c, "test", ttl, "B", "A", "Cache did not persist item. ")
+	if c.Size() != 1 {
+		t.Fatal("Cache size not properly reported.")
+	}
 }
 
 // TestLRUPrune ensures that the cache prunes the least recently used item.
 func TestLRUPrune(t *testing.T) {
-	c := NewCache(3)
+	c := &Cache{MaxSize: 3}
 	ttl := 100 * time.Second
 	setCacheValue(t, c, "A", ttl, "A")
 	setCacheValue(t, c, "B", ttl, "B")
@@ -53,7 +56,7 @@ func TestLRUPrune(t *testing.T) {
 }
 
 func TestExpirePrune(t *testing.T) {
-	c := NewCache(3)
+	c := &Cache{MaxSize: 3}
 	ttl := 100 * time.Second
 	setCacheValue(t, c, "A", ttl, "A")
 	setCacheValue(t, c, "B", ttl, "B")
@@ -66,14 +69,15 @@ func TestExpirePrune(t *testing.T) {
 }
 
 func TestPruneLimit(t *testing.T) {
-	c := NewCache(5)
+	c := &Cache{MaxSize: 5}
 	for _, key := range "ABCDEF" {
 		expectCacheValue(t, c, string(key), 100*time.Second, string(key), string(key), "Key generator did not get called correctly.")
 	}
 }
 
 func TestRefresh(t *testing.T) {
-	c := NewCache(1)
+	c := &Cache{MaxSize: 1}
+	c.Purge()
 	future := make(chan bool)
 	close(future)
 	c.data["test"] = &cacheItem{future: future, ttl: 100 * time.Second, created: time.Now().Add(-75 * time.Second), val: "A"}
@@ -83,7 +87,7 @@ func TestRefresh(t *testing.T) {
 }
 
 func TestErrorPropogation(t *testing.T) {
-	c := NewCache(1)
+	c := &Cache{MaxSize: 1}
 	_, err := c.Get("test", 100*time.Second, func(string) (interface{}, error) {
 		return nil, errors.New("Test Error")
 	})()
@@ -94,9 +98,25 @@ func TestErrorPropogation(t *testing.T) {
 }
 
 func TestExpiredRefetch(t *testing.T) {
-	c := NewCache(1)
+	c := &Cache{MaxSize: 1}
+	c.Purge()
 	future := make(chan bool)
 	close(future)
 	c.data["test"] = &cacheItem{future: future, ttl: 10 * time.Second, created: time.Now().Add(-75 * time.Second), val: "A"}
 	expectCacheValue(t, c, "test", 100*time.Second, "B", "B", "Old key did not get expired correctly")
+}
+
+func TestExpiredPurge(t *testing.T) {
+	c := &Cache{MaxSize: 1}
+	c.Purge()
+	future := make(chan bool)
+	close(future)
+	c.data["test"] = &cacheItem{future: future, ttl: 10 * time.Second, created: time.Now().Add(-75 * time.Second), val: "A"}
+	if !c.data["test"].expired() {
+		t.Fatal("Expired cacheItem did not properly indicate expired()")
+	}
+	c.Purge()
+	if c.Size() != 0 {
+		t.Fatal("Expired cache item was not purged.")
+	}
 }
