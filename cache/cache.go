@@ -5,11 +5,6 @@ import (
 	"time"
 )
 
-// Future defines an object which can eventually deliver a value
-type Future interface {
-	Get() (interface{}, error)
-}
-
 type cacheItem struct {
 	lastUsed time.Time
 	created  time.Time
