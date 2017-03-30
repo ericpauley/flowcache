@@ -30,21 +30,14 @@ func (item *cacheItem) shouldRefresh() bool {
 }
 
 // Cache implements a cache
-type Cache interface {
-	Get(key string, ttl time.Duration, generate func(string) (interface{}, error)) func() (interface{}, error)
-	Purge()
-	Size() int
-	Resize(new int) int
-}
-
-type cache struct {
+type Cache struct {
 	data    map[string]*cacheItem
 	maxSize int
 	mutex   sync.Mutex
 }
 
 // prune removes LRU elements from the cache until its size is newSize
-func (c *cache) prune(newSize int) {
+func (c *Cache) prune(newSize int) {
 	for len(c.data) > newSize {
 		checked := 0
 		var candidateKey string
@@ -64,7 +57,7 @@ func (c *cache) prune(newSize int) {
 	}
 }
 
-func (c *cache) generateItem(key string, item *cacheItem, generate func(string) (interface{}, error), future chan bool) {
+func (c *Cache) generateItem(key string, item *cacheItem, generate func(string) (interface{}, error), future chan bool) {
 	val, err := generate(key)
 	item.mutex.Lock()
 	defer item.mutex.Unlock()
@@ -88,7 +81,7 @@ func (c *cache) generateItem(key string, item *cacheItem, generate func(string) 
 //
 // If the cache entry is half way through its TTL a new goroutine will be spawned at the time of retrieval,
 // though the current cached values will be returned immediately.
-func (c *cache) Get(key string, ttl time.Duration, generate func(string) (interface{}, error)) func() (interface{}, error) {
+func (c *Cache) Get(key string, ttl time.Duration, generate func(string) (interface{}, error)) func() (interface{}, error) {
 	c.mutex.Lock()
 	item, ok := c.data[key]
 	if !ok {
@@ -126,7 +119,8 @@ func (c *cache) Get(key string, ttl time.Duration, generate func(string) (interf
 	}
 }
 
-func (c *cache) Purge() {
+// Purge finds and removes all expired cache entires from the cache, allowing the data to be freed by the garbage collector.
+func (c *Cache) Purge() {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 	for key, val := range c.data {
@@ -136,11 +130,13 @@ func (c *cache) Purge() {
 	}
 }
 
-func (c *cache) Size() int {
+// Size returns the number of cache entires (including unpurged expired entries) in the cache.
+func (c *Cache) Size() int {
 	return len(c.data)
 }
 
-func (c *cache) Resize(new int) (old int) {
+// Resize updates the maxSize of the cache.
+func (c *Cache) Resize(new int) (old int) {
 	old = c.maxSize
 	if new != 0 {
 		c.maxSize = new
@@ -150,6 +146,6 @@ func (c *cache) Resize(new int) (old int) {
 }
 
 // NewCache creates a new cache of size maxSize
-func NewCache(maxSize int) Cache {
-	return &cache{data: make(map[string]*cacheItem), maxSize: maxSize}
+func NewCache(maxSize int) *Cache {
+	return &Cache{data: make(map[string]*cacheItem), maxSize: maxSize}
 }

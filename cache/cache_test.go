@@ -18,7 +18,7 @@ func noError(t *testing.T, err error) {
 	}
 }
 
-func expectCacheValue(t *testing.T, c Cache, key string, ttl time.Duration, val string, expected string, message string) string {
+func expectCacheValue(t *testing.T, c *Cache, key string, ttl time.Duration, val string, expected string, message string) string {
 	actual, err := c.Get(key, ttl, getGeneratorStub(val, nil))()
 	noError(t, err)
 	if actual != expected {
@@ -27,7 +27,7 @@ func expectCacheValue(t *testing.T, c Cache, key string, ttl time.Duration, val 
 	return expected
 }
 
-func setCacheValue(t *testing.T, c Cache, key string, ttl time.Duration, val string) {
+func setCacheValue(t *testing.T, c *Cache, key string, ttl time.Duration, val string) {
 	_, err := c.Get(key, ttl, getGeneratorStub(val, nil))()
 	noError(t, err)
 }
@@ -60,7 +60,7 @@ func TestExpirePrune(t *testing.T) {
 	expectCacheValue(t, c, "C", 1*time.Millisecond, "C", "C", "Cache item C was expired too quickly")
 	time.Sleep(1 * time.Millisecond)
 	setCacheValue(t, c, "D", ttl, "D")
-	if _, ok := c.(*cache).data["C"]; ok {
+	if _, ok := c.data["C"]; ok {
 		t.Fatal("Cache item C was not correctly evicted.")
 	}
 }
@@ -73,7 +73,7 @@ func TestPruneLimit(t *testing.T) {
 }
 
 func TestRefresh(t *testing.T) {
-	c := NewCache(1).(*cache)
+	c := NewCache(1)
 	future := make(chan bool)
 	close(future)
 	c.data["test"] = &cacheItem{future: future, ttl: 100 * time.Second, created: time.Now().Add(-75 * time.Second), val: "A"}
@@ -94,7 +94,7 @@ func TestErrorPropogation(t *testing.T) {
 }
 
 func TestExpiredRefetch(t *testing.T) {
-	c := NewCache(1).(*cache)
+	c := NewCache(1)
 	future := make(chan bool)
 	close(future)
 	c.data["test"] = &cacheItem{future: future, ttl: 10 * time.Second, created: time.Now().Add(-75 * time.Second), val: "A"}
