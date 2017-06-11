@@ -21,33 +21,40 @@ type cacheItem struct {
 	future   <-chan bool
 	refresh  <-chan bool
 	mutex    sync.Mutex
+	cache    *Cache
 }
 
 func (item *cacheItem) expired() bool {
-	return item.ttl != 0 && item.created.Add(item.ttl).Before(time.Now())
+	used := item.created
+	if !item.lastUsed.IsZero() && item.cache.ExtendOnUse {
+		used = item.lastUsed
+	}
+	return !used.IsZero() && item.ttl != 0 && used.Add(item.ttl).Before(time.Now())
 }
 
 func (item *cacheItem) shouldRefresh() bool {
-	return item.ttl != 0 && item.created.Add(item.ttl/2).Before(time.Now())
+	return item.cache.Refresh && !item.created.IsZero() && item.ttl != 0 && item.created.Add(item.ttl/2).Before(time.Now())
 }
 
 // Cache implements a cache
 type Cache struct {
-	data    map[string]*cacheItem
-	MaxSize int
-	mutex   sync.Mutex
+	data        map[interface{}]*cacheItem
+	MaxSize     int
+	mutex       sync.Mutex
+	Refresh     bool
+	ExtendOnUse bool
 }
 
 // Prune removes LRU elements from the cache until it has room for one new element
 func (c *Cache) Prune() {
 	for len(c.data) >= c.MaxSize {
 		checked := 0
-		var candidateKey string
+		var candidateKey interface{}
 		for k, v := range c.data {
 			if v.ttl == 0 || v.expired() { // Expired keys are immediate candidates for removal
 				candidateKey = k
 				break
-			} else if candidateKey == "" || v.lastUsed.Before(c.data[candidateKey].lastUsed) {
+			} else if candidateKey == nil || v.lastUsed.Before(c.data[candidateKey].lastUsed) {
 				candidateKey = k
 			}
 			checked++
@@ -59,7 +66,7 @@ func (c *Cache) Prune() {
 	}
 }
 
-func (c *Cache) generateItem(key string, item *cacheItem, generate func(string) (interface{}, error), future chan bool) {
+func (c *Cache) generateItem(key interface{}, item *cacheItem, generate func(interface{}) (interface{}, error), future chan bool) {
 	val, err := generate(key)
 	item.mutex.Lock()
 	defer item.mutex.Unlock()
@@ -79,7 +86,7 @@ func (c *Cache) generateItem(key string, item *cacheItem, generate func(string) 
 func (c *Cache) lockMap() {
 	c.mutex.Lock()
 	if c.data == nil {
-		c.data = make(map[string]*cacheItem)
+		c.data = make(map[interface{}]*cacheItem)
 	}
 }
 
@@ -94,12 +101,12 @@ func (c *Cache) lockMap() {
 //
 // Expiration/Refresh conditions are evaluated immediately upon calling Get(),
 // the retrieval function returns the cache query as it was evaluated during the Get operation.
-func (c *Cache) Get(key string, ttl time.Duration, generate func(string) (interface{}, error)) func() (interface{}, error) {
+func (c *Cache) Get(key interface{}, ttl time.Duration, generate func(interface{}) (interface{}, error)) func() (interface{}, error) {
 	c.lockMap()
 	item, ok := c.data[key]
 	if !ok {
 		future := make(chan bool)
-		item = &cacheItem{val: nil, future: future, ttl: ttl}
+		item = &cacheItem{val: nil, future: future, ttl: ttl, cache: c}
 		c.Prune()
 		c.data[key] = item
 		go c.generateItem(key, item, generate, future)
@@ -136,6 +143,7 @@ func (c *Cache) Get(key string, ttl time.Duration, generate func(string) (interf
 		result, resErr = item.val, item.err
 		close(resultWait)
 	}()
+	c.PurgeCount(5)
 	return func() (interface{}, error) {
 		<-resultWait
 		return result, resErr
@@ -149,6 +157,22 @@ func (c *Cache) Purge() {
 	for key, val := range c.data {
 		if val.expired() {
 			delete(c.data, key)
+		}
+	}
+}
+
+// PurgeCount finds and removes all expired cache entires from the cache, checking at moust count items.
+func (c *Cache) PurgeCount(count int) {
+	processed := 0
+	c.lockMap()
+	defer c.mutex.Unlock()
+	for key, val := range c.data {
+		if val.expired() {
+			delete(c.data, key)
+		}
+		processed++
+		if processed >= count {
+			break
 		}
 	}
 }

@@ -6,8 +6,8 @@ import (
 	"time"
 )
 
-func getGeneratorStub(output interface{}, err error) func(string) (interface{}, error) {
-	return func(string) (interface{}, error) {
+func getGeneratorStub(output interface{}, err error) func(interface{}) (interface{}, error) {
+	return func(interface{}) (interface{}, error) {
 		return output, err
 	}
 }
@@ -76,11 +76,11 @@ func TestPruneLimit(t *testing.T) {
 }
 
 func TestRefresh(t *testing.T) {
-	c := &Cache{MaxSize: 1}
+	c := &Cache{MaxSize: 1, Refresh: true}
 	c.Purge()
 	future := make(chan bool)
 	close(future)
-	c.data["test"] = &cacheItem{future: future, ttl: 100 * time.Second, created: time.Now().Add(-75 * time.Second), val: "A"}
+	c.data["test"] = &cacheItem{cache: c, future: future, ttl: 100 * time.Second, created: time.Now().Add(-75 * time.Second), val: "A"}
 	expectCacheValue(t, c, "test", 100*time.Second, "B", "A", "Cache item was not present")
 	time.Sleep(1 * time.Millisecond)
 	expectCacheValue(t, c, "test", 100*time.Second, "C", "B", "Cache item was not updated")
@@ -88,7 +88,7 @@ func TestRefresh(t *testing.T) {
 
 func TestErrorPropogation(t *testing.T) {
 	c := &Cache{MaxSize: 1}
-	_, err := c.Get("test", 100*time.Second, func(string) (interface{}, error) {
+	_, err := c.Get("test", 100*time.Second, func(interface{}) (interface{}, error) {
 		return nil, errors.New("Test Error")
 	})()
 	if err == nil {
@@ -102,8 +102,17 @@ func TestExpiredRefetch(t *testing.T) {
 	c.Purge()
 	future := make(chan bool)
 	close(future)
-	c.data["test"] = &cacheItem{future: future, ttl: 10 * time.Second, created: time.Now().Add(-75 * time.Second), val: "A"}
+	c.data["test"] = &cacheItem{cache: c, future: future, ttl: 10 * time.Second, created: time.Now().Add(-75 * time.Second), val: "A"}
 	expectCacheValue(t, c, "test", 100*time.Second, "B", "B", "Old key did not get expired correctly")
+}
+
+func TestExtendOnUse(t *testing.T) {
+	c := &Cache{MaxSize: 1, ExtendOnUse: true}
+	c.Purge()
+	future := make(chan bool)
+	close(future)
+	c.data["test"] = &cacheItem{cache: c, future: future, ttl: 10 * time.Second, created: time.Now().Add(-75 * time.Second), lastUsed: time.Now(), val: "A"}
+	expectCacheValue(t, c, "test", 100*time.Second, "B", "A", "Key was expired despite being used")
 }
 
 func TestExpiredPurge(t *testing.T) {
@@ -111,7 +120,7 @@ func TestExpiredPurge(t *testing.T) {
 	c.Purge()
 	future := make(chan bool)
 	close(future)
-	c.data["test"] = &cacheItem{future: future, ttl: 10 * time.Second, created: time.Now().Add(-75 * time.Second), val: "A"}
+	c.data["test"] = &cacheItem{cache: c, future: future, ttl: 10 * time.Second, created: time.Now().Add(-75 * time.Second), val: "A"}
 	if !c.data["test"].expired() {
 		t.Fatal("Expired cacheItem did not properly indicate expired()")
 	}
