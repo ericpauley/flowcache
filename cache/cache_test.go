@@ -55,6 +55,15 @@ func TestLRUPrune(t *testing.T) {
 	expectCacheValue(t, c, "A", ttl, "test", "test", "Cache item A was not correctly evicted.")
 }
 
+// TestLRUPrune ensures that the cache prunes the least recently used item.
+func TestClear(t *testing.T) {
+	c := &Cache{MaxSize: 3}
+	ttl := 100 * time.Second
+	setCacheValue(t, c, "A", ttl, "A")
+	c.Clear()
+	expectCacheValue(t, c, "A", ttl, "test", "test", "Cache item A was not cleared.")
+}
+
 func TestExpirePrune(t *testing.T) {
 	c := &Cache{MaxSize: 3}
 	ttl := 100 * time.Second

@@ -177,6 +177,13 @@ func (c *Cache) PurgeCount(count int) {
 	}
 }
 
+// Clear removes all items from the cache.
+func (c *Cache) Clear() {
+	c.lockMap()
+	defer c.mutex.Unlock()
+	c.data = nil
+}
+
 // Size returns the number of cache entires (including unpurged expired entries) in the cache.
 func (c *Cache) Size() int {
 	return len(c.data)
