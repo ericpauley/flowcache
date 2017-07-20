@@ -8,6 +8,7 @@ It does this by creating a cacheItem which contains a wait condition on the valu
 package cache
 
 import (
+	"errors"
 	"sync"
 	"time"
 )
@@ -43,6 +44,7 @@ type Cache struct {
 	mutex       sync.Mutex
 	Refresh     bool
 	ExtendOnUse bool
+	GetTimeout  time.Duration
 }
 
 // Prune removes LRU elements from the cache until it has room for one new element
@@ -145,6 +147,14 @@ func (c *Cache) Get(key interface{}, ttl time.Duration, generate func(interface{
 	}()
 	c.PurgeCount(5)
 	return func() (interface{}, error) {
+		if c.GetTimeout != 0 {
+			select {
+			case <-resultWait:
+				return result, resErr
+			case <-time.After(c.GetTimeout):
+				return nil, errors.New("Generation timed out")
+			}
+		}
 		<-resultWait
 		return result, resErr
 	}

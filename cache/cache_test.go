@@ -124,6 +124,24 @@ func TestExtendOnUse(t *testing.T) {
 	expectCacheValue(t, c, "test", 100*time.Second, "B", "A", "Key was expired despite being used")
 }
 
+func TestTimeout(t *testing.T) {
+	c := &Cache{MaxSize: 1, GetTimeout: 10 * time.Millisecond}
+	c.Purge()
+	val, err := c.Get("test", 100*time.Second, func(arg3 interface{}) (interface{}, error) {
+		return "A", nil
+	})()
+	if val != "A" || err != nil {
+		t.Fatal("Cache expired valid fetch")
+	}
+	_, err = c.Get("test2", 100*time.Second, func(arg3 interface{}) (interface{}, error) {
+		time.Sleep(1 * time.Second)
+		return "A", nil
+	})()
+	if err == nil {
+		t.Fatal("Cache did not expire bad fetch")
+	}
+}
+
 func TestExpiredPurge(t *testing.T) {
 	c := &Cache{MaxSize: 1}
 	c.Purge()
