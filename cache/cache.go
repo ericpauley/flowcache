@@ -47,12 +47,13 @@ type Cache struct {
 	GetTimeout  time.Duration
 }
 
-// Prune removes LRU elements from the cache until it has room for one new element
-func (c *Cache) Prune() {
+func (c *Cache) prune() {
 	for len(c.data) >= c.MaxSize {
 		checked := 0
 		var candidateKey interface{}
 		for k, v := range c.data {
+			v.mutex.Lock()
+			defer v.mutex.Unlock()
 			if v.ttl == 0 || v.expired() { // Expired keys are immediate candidates for removal
 				candidateKey = k
 				break
@@ -68,6 +69,12 @@ func (c *Cache) Prune() {
 	}
 }
 
+// Prune removes LRU elements from the cache until it has room for one new element
+func (c *Cache) Prune() {
+	c.lockMap()
+	defer c.mutex.Unlock()
+}
+
 func (c *Cache) generateItem(key interface{}, item *cacheItem, generate func(interface{}) (interface{}, error), future chan bool) {
 	val, err := generate(key)
 	item.mutex.Lock()
@@ -76,8 +83,12 @@ func (c *Cache) generateItem(key interface{}, item *cacheItem, generate func(int
 		item.val, item.err = val, err
 	}
 	if item.refresh == nil && (item.err != nil || item.ttl == 0) {
+		item.mutex.Unlock()
 		c.lockMap()
-		delete(c.data, key) // Don't allow anything else to use this error/instant result
+		item.mutex.Lock()
+		if c.data[key] == item {
+			delete(c.data, key) // Don't allow anything else to use this error/instant result
+		}
 		c.mutex.Unlock()
 	}
 	item.created = time.Now()
@@ -109,7 +120,7 @@ func (c *Cache) Get(key interface{}, ttl time.Duration, generate func(interface{
 	if !ok {
 		future := make(chan bool)
 		item = &cacheItem{val: nil, future: future, ttl: ttl, cache: c}
-		c.Prune()
+		c.prune()
 		c.data[key] = item
 		go c.generateItem(key, item, generate, future)
 	}
@@ -118,14 +129,21 @@ func (c *Cache) Get(key interface{}, ttl time.Duration, generate func(interface{
 	var resErr error
 	resultWait := make(chan bool)
 	go func() {
-		<-item.future
+		item.mutex.Lock()
+		future := item.future
+		item.mutex.Unlock()
+		<-future
 		item.mutex.Lock()
 		if item.expired() {
 			if item.future != nil { // The item hasn't already been destroyed
 				item.future, item.refresh = item.refresh, nil // Atempt to promote the refresh routine to main provider
 				if item.future == nil {                       // There is no valid refresh routine
+					item.mutex.Unlock()
 					c.lockMap()
-					delete(c.data, key)
+					item.mutex.Lock()
+					if item == c.data[key] {
+						delete(c.data, key)
+					}
 					c.mutex.Unlock()
 				}
 			}
