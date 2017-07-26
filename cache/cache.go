@@ -141,8 +141,8 @@ func (c *Cache) Get(key interface{}, ttl time.Duration, generate func(interface{
 		}
 		item.ttl = ttl
 		item.lastUsed = time.Now()
-		item.mutex.Unlock()
 		result, resErr = item.val, item.err
+		item.mutex.Unlock()
 		close(resultWait)
 	}()
 	c.PurgeCount(5)
@@ -165,9 +165,11 @@ func (c *Cache) Purge() {
 	c.lockMap()
 	defer c.mutex.Unlock()
 	for key, val := range c.data {
+		val.mutex.Lock()
 		if val.expired() {
 			delete(c.data, key)
 		}
+		val.mutex.Unlock()
 	}
 }
 
@@ -177,9 +179,11 @@ func (c *Cache) PurgeCount(count int) {
 	c.lockMap()
 	defer c.mutex.Unlock()
 	for key, val := range c.data {
+		val.mutex.Lock()
 		if val.expired() {
 			delete(c.data, key)
 		}
+		val.mutex.Unlock()
 		processed++
 		if processed >= count {
 			break
