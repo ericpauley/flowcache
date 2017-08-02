@@ -21,7 +21,6 @@ type cacheItem struct {
 	err      error
 	future   <-chan bool
 	refresh  <-chan bool
-	mutex    sync.Mutex
 	cache    *Cache
 }
 
@@ -52,8 +51,6 @@ func (c *Cache) prune() {
 		checked := 0
 		var candidateKey interface{}
 		for k, v := range c.data {
-			v.mutex.Lock()
-			defer v.mutex.Unlock()
 			if v.ttl == 0 || v.expired() { // Expired keys are immediate candidates for removal
 				candidateKey = k
 				break
@@ -69,27 +66,17 @@ func (c *Cache) prune() {
 	}
 }
 
-// Prune removes LRU elements from the cache until it has room for one new element
-func (c *Cache) Prune() {
-	c.lockMap()
-	defer c.mutex.Unlock()
-}
-
 func (c *Cache) generateItem(key interface{}, item *cacheItem, generate func(interface{}) (interface{}, error), future chan bool) {
 	val, err := generate(key)
-	item.mutex.Lock()
-	defer item.mutex.Unlock()
+	c.lockMap()
+	defer c.mutex.Unlock()
 	if err == nil || item.refresh == nil { // Only propogate errors if this isn't a refresh
 		item.val, item.err = val, err
 	}
 	if item.refresh == nil && (item.err != nil || item.ttl == 0) {
-		item.mutex.Unlock()
-		c.lockMap()
-		item.mutex.Lock()
 		if c.data[key] == item {
 			delete(c.data, key) // Don't allow anything else to use this error/instant result
 		}
-		c.mutex.Unlock()
 	}
 	item.created = time.Now()
 	item.refresh = nil // Clear out a refresh channel if there is one
@@ -124,34 +111,29 @@ func (c *Cache) Get(key interface{}, ttl time.Duration, generate func(interface{
 		c.data[key] = item
 		go c.generateItem(key, item, generate, future)
 	}
+	future := item.future
 	c.mutex.Unlock()
 	var result interface{}
 	var resErr error
 	resultWait := make(chan bool)
 	go func() {
-		item.mutex.Lock()
-		future := item.future
-		item.mutex.Unlock()
 		<-future
-		item.mutex.Lock()
+		c.lockMap()
 		if item.expired() {
 			if item.future != nil { // The item hasn't already been destroyed
 				item.future, item.refresh = item.refresh, nil // Atempt to promote the refresh routine to main provider
 				if item.future == nil {                       // There is no valid refresh routine
-					item.mutex.Unlock()
-					c.lockMap()
-					item.mutex.Lock()
 					if item == c.data[key] {
 						delete(c.data, key)
 					}
-					c.mutex.Unlock()
 				}
 			}
-			item.mutex.Unlock()
+			c.mutex.Unlock()
 			result, resErr = c.Get(key, ttl, generate)()
 			close(resultWait)
 			return
 		}
+		defer c.mutex.Unlock()
 		if item.shouldRefresh() && item.refresh == nil {
 			refresh := make(chan bool)
 			item.refresh = refresh
@@ -160,7 +142,6 @@ func (c *Cache) Get(key interface{}, ttl time.Duration, generate func(interface{
 		item.ttl = ttl
 		item.lastUsed = time.Now()
 		result, resErr = item.val, item.err
-		item.mutex.Unlock()
 		close(resultWait)
 	}()
 	c.PurgeCount(5)
@@ -183,11 +164,9 @@ func (c *Cache) Purge() {
 	c.lockMap()
 	defer c.mutex.Unlock()
 	for key, val := range c.data {
-		val.mutex.Lock()
 		if val.expired() {
 			delete(c.data, key)
 		}
-		val.mutex.Unlock()
 	}
 }
 
@@ -197,11 +176,9 @@ func (c *Cache) PurgeCount(count int) {
 	c.lockMap()
 	defer c.mutex.Unlock()
 	for key, val := range c.data {
-		val.mutex.Lock()
 		if val.expired() {
 			delete(c.data, key)
 		}
-		val.mutex.Unlock()
 		processed++
 		if processed >= count {
 			break

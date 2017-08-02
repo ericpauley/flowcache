@@ -3,6 +3,7 @@ package cache
 import (
 	"errors"
 	"math/rand"
+	"sync"
 	"testing"
 	"time"
 )
@@ -35,13 +36,21 @@ func setCacheValue(t *testing.T, c *Cache, key string, ttl time.Duration, val st
 
 func TestIntegrateCache(t *testing.T) {
 	c := &Cache{MaxSize: 128}
-	for i := 0; i < 10000; i++ {
-		key := rand.Uint32() % 256
-		c.Get(key, time.Duration(rand.Uint32()%200)*time.Millisecond, func(arg3 interface{}) (interface{}, error) {
-			time.Sleep(time.Duration(rand.Uint32()%1000) * time.Microsecond)
-			return 0, nil
-		})
+	w := sync.WaitGroup{}
+	for i := 0; i < 10; i++ {
+		w.Add(1)
+		go func() {
+			for i := 0; i < 10000; i++ {
+				key := rand.Uint32() % 256
+				c.Get(key, time.Duration(rand.Uint32()%200)*time.Millisecond, func(arg3 interface{}) (interface{}, error) {
+					time.Sleep(time.Duration(rand.Uint32()%1000) * time.Microsecond)
+					return 0, nil
+				})
+			}
+			w.Done()
+		}()
 	}
+	w.Wait()
 }
 
 // TestCacheStorage tests that the cache actually stores a value for a key. It gets an item then gets it again using a different generator.
