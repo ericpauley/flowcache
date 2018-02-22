@@ -44,6 +44,7 @@ type Cache struct {
 	Refresh     bool
 	ExtendOnUse bool
 	GetTimeout  time.Duration
+	Recover     bool
 }
 
 func (c *Cache) prune() {
@@ -67,7 +68,20 @@ func (c *Cache) prune() {
 }
 
 func (c *Cache) generateItem(key interface{}, item *cacheItem, generate func(interface{}) (interface{}, error), future chan bool) {
-	val, err := generate(key)
+	var val interface{}
+	var err error
+	func() {
+		if c.Recover {
+			defer func() {
+				if r := recover(); r != nil {
+					val = nil
+					err = errors.New("Unknown Error")
+				}
+			}()
+		}
+		val, err = generate(key)
+
+	}()
 	c.lockMap()
 	defer c.mutex.Unlock()
 	if err == nil || item.refresh == nil { // Only propogate errors if this isn't a refresh

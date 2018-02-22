@@ -77,6 +77,14 @@ func TestLRUPrune(t *testing.T) {
 }
 
 // TestLRUPrune ensures that the cache prunes the least recently used item.
+func TestPanic(t *testing.T) {
+	c := &Cache{MaxSize: 3, Recover: true}
+	c.Get("test", 1*time.Second, func(arg3 interface{}) (interface{}, error) {
+		panic("Oops!")
+	})
+}
+
+// TestLRUPrune ensures that the cache prunes the least recently used item.
 func TestClear(t *testing.T) {
 	c := &Cache{MaxSize: 3}
 	ttl := 100 * time.Second
