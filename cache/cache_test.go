@@ -185,3 +185,27 @@ func TestExpiredPurge(t *testing.T) {
 		t.Fatal("Expired cache item was not purged.")
 	}
 }
+
+func TestMaxStorage(t *testing.T) {
+	c := &Cache{MaxStorage: 1000, MaxSize: 1000}
+
+	setCacheValue(t, c, "a", 10*time.Second, "a")
+	t.Logf("Storage size: %d", c.data["a"].size)
+}
+
+type S struct {
+	p *S
+}
+
+func TestSelfReferentialStore(t *testing.T) {
+	c := &Cache{MaxStorage: 1000, MaxSize: 1000}
+	c.Purge()
+	s := S{}
+	s.p = &s
+	val, _ := c.Get("test", 100*time.Second, func(arg3 interface{}) (interface{}, error) {
+		return s, nil
+	})()
+	if val != s {
+		t.Fatal("Self-referential value not stored")
+	}
+}

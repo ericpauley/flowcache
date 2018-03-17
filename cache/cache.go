@@ -11,6 +11,8 @@ import (
 	"errors"
 	"sync"
 	"time"
+
+	"github.com/ericpauley/go-utils/memory"
 )
 
 type cacheItem struct {
@@ -22,6 +24,7 @@ type cacheItem struct {
 	future   <-chan bool
 	refresh  <-chan bool
 	cache    *Cache
+	size     uint64
 }
 
 func (item *cacheItem) expired() bool {
@@ -36,19 +39,31 @@ func (item *cacheItem) shouldRefresh() bool {
 	return item.cache.Refresh && !item.created.IsZero() && item.ttl != 0 && item.created.Add(item.ttl/2).Before(time.Now())
 }
 
+func (item *cacheItem) updateSize(key interface{}) {
+	item.cache.storage -= item.size
+	if item.val != nil {
+		item.size = memory.Sizeof(item.val)
+	} else {
+		item.size = 0
+	}
+	item.cache.storage += item.size
+}
+
 // Cache implements a cache
 type Cache struct {
 	data        map[interface{}]*cacheItem
 	MaxSize     int
+	MaxStorage  uint64
 	mutex       sync.Mutex
 	Refresh     bool
 	ExtendOnUse bool
 	GetTimeout  time.Duration
 	Recover     bool
+	storage     uint64
 }
 
 func (c *Cache) prune() {
-	for len(c.data) >= c.MaxSize {
+	for len(c.data) >= c.MaxSize || (c.MaxStorage != 0 && c.storage > c.MaxStorage) {
 		checked := 0
 		var candidateKey interface{}
 		for k, v := range c.data {
@@ -63,8 +78,13 @@ func (c *Cache) prune() {
 				break
 			}
 		}
-		delete(c.data, candidateKey)
+		c.remove(candidateKey)
 	}
+}
+
+func (c *Cache) remove(candidateKey interface{}) {
+	c.storage -= c.data[candidateKey].size
+	delete(c.data, candidateKey)
 }
 
 func (c *Cache) generateItem(key interface{}, item *cacheItem, generate func(interface{}) (interface{}, error), future chan bool) {
@@ -86,10 +106,11 @@ func (c *Cache) generateItem(key interface{}, item *cacheItem, generate func(int
 	defer c.mutex.Unlock()
 	if err == nil || item.refresh == nil { // Only propogate errors if this isn't a refresh
 		item.val, item.err = val, err
+		item.updateSize(key)
 	}
 	if item.refresh == nil && (item.err != nil || item.ttl == 0) {
 		if c.data[key] == item {
-			delete(c.data, key) // Don't allow anything else to use this error/instant result
+			c.remove(key) // Don't allow anything else to use this error/instant result
 		}
 	}
 	item.created = time.Now()
@@ -138,7 +159,7 @@ func (c *Cache) Get(key interface{}, ttl time.Duration, generate func(interface{
 				item.future, item.refresh = item.refresh, nil // Atempt to promote the refresh routine to main provider
 				if item.future == nil {                       // There is no valid refresh routine
 					if item == c.data[key] {
-						delete(c.data, key)
+						c.remove(key)
 					}
 				}
 			}
@@ -179,7 +200,7 @@ func (c *Cache) Purge() {
 	defer c.mutex.Unlock()
 	for key, val := range c.data {
 		if val.expired() {
-			delete(c.data, key)
+			c.remove(key)
 		}
 	}
 }
@@ -191,7 +212,7 @@ func (c *Cache) PurgeCount(count int) {
 	defer c.mutex.Unlock()
 	for key, val := range c.data {
 		if val.expired() {
-			delete(c.data, key)
+			c.remove(key)
 		}
 		processed++
 		if processed >= count {
