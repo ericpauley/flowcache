@@ -42,7 +42,12 @@ func (item *cacheItem) shouldRefresh() bool {
 func (item *cacheItem) updateSize(key interface{}) {
 	item.cache.storage -= item.size
 	if item.val != nil {
-		item.size = memory.Sizeof(item.val)
+		func() {
+			defer func() {
+				recover()
+			}()
+			item.size = memory.Sizeof(item.val)
+		}()
 	} else {
 		item.size = 0
 	}
