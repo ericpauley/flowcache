@@ -39,21 +39,6 @@ func (item *cacheItem) shouldRefresh() bool {
 	return item.cache.Refresh && !item.created.IsZero() && item.ttl != 0 && item.created.Add(item.ttl/2).Before(time.Now())
 }
 
-func (item *cacheItem) updateSize(key interface{}) {
-	item.cache.storage -= item.size
-	if item.val != nil {
-		func() {
-			defer func() {
-				recover()
-			}()
-			item.size = memory.Sizeof(item.val)
-		}()
-	} else {
-		item.size = 0
-	}
-	item.cache.storage += item.size
-}
-
 // Cache implements a cache
 type Cache struct {
 	data        map[interface{}]*cacheItem
@@ -107,11 +92,22 @@ func (c *Cache) generateItem(key interface{}, item *cacheItem, generate func(int
 		val, err = generate(key)
 
 	}()
+	var size uint64
+	if val != nil {
+		func() {
+			defer func() {
+				recover()
+			}()
+			size = memory.Sizeof(val)
+		}()
+	}
 	c.lockMap()
 	defer c.mutex.Unlock()
 	if err == nil || item.refresh == nil { // Only propogate errors if this isn't a refresh
 		item.val, item.err = val, err
-		item.updateSize(key)
+		item.cache.storage -= item.size
+		item.size = size
+		item.cache.storage += item.size
 	}
 	if item.refresh == nil && (item.err != nil || item.ttl == 0) {
 		if c.data[key] == item {
