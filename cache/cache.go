@@ -59,7 +59,11 @@ func (c *Cache) prune() {
 			if v.ttl == 0 || c.expired(v) { // Expired keys are immediate candidates for removal
 				candidateKey = k
 				break
-			} else if candidateKey == nil || v.lastUsed.Before(c.data[candidateKey].lastUsed) {
+			} else if candidateKey == nil {
+				candidateKey = k
+			} else if c.data[candidateKey].lastUsed.IsZero() {
+				candidateKey = k
+			} else if !v.lastUsed.IsZero() && v.lastUsed.Before(c.data[candidateKey].lastUsed) {
 				candidateKey = k
 			}
 			checked++
