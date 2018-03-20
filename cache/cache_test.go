@@ -20,12 +20,25 @@ func noError(t *testing.T, err error) {
 	}
 }
 
+func expectConsistentCacheSize(t *testing.T, c *Cache) {
+	c.lockMap()
+	defer c.mutex.Unlock()
+	var s uint64
+	for _, v := range c.data {
+		s += v.size
+	}
+	if s != c.storage {
+		t.Fatal("Cache storage inconsistent")
+	}
+}
+
 func expectCacheValue(t *testing.T, c *Cache, key string, ttl time.Duration, val string, expected string, message string) string {
 	actual, err := c.Get(key, ttl, getGeneratorStub(val, nil))()
 	noError(t, err)
 	if actual != expected {
 		t.Fatalf("%s (%s != %s)", message, actual, expected)
 	}
+	expectConsistentCacheSize(t, c)
 	return expected
 }
 
@@ -90,6 +103,9 @@ func TestClear(t *testing.T) {
 	ttl := 100 * time.Second
 	setCacheValue(t, c, "A", ttl, "A")
 	c.Clear()
+	if c.storage != 0 {
+		t.Fatal("Clearing cache didn't reset storage")
+	}
 	expectCacheValue(t, c, "A", ttl, "test", "test", "Cache item A was not cleared.")
 }
 
@@ -118,7 +134,7 @@ func TestRefresh(t *testing.T) {
 	c.Purge()
 	future := make(chan bool)
 	close(future)
-	c.data["test"] = &cacheItem{cache: c, future: future, ttl: 100 * time.Second, created: time.Now().Add(-75 * time.Second), val: "A"}
+	c.data["test"] = &cacheItem{future: future, ttl: 100 * time.Second, created: time.Now().Add(-75 * time.Second), val: "A"}
 	expectCacheValue(t, c, "test", 100*time.Second, "B", "A", "Cache item was not present")
 	time.Sleep(1 * time.Millisecond)
 	expectCacheValue(t, c, "test", 100*time.Second, "C", "B", "Cache item was not updated")
@@ -140,7 +156,7 @@ func TestExpiredRefetch(t *testing.T) {
 	c.Purge()
 	future := make(chan bool)
 	close(future)
-	c.data["test"] = &cacheItem{cache: c, future: future, ttl: 10 * time.Second, created: time.Now().Add(-75 * time.Second), val: "A"}
+	c.data["test"] = &cacheItem{future: future, ttl: 10 * time.Second, created: time.Now().Add(-75 * time.Second), val: "A"}
 	expectCacheValue(t, c, "test", 100*time.Second, "B", "B", "Old key did not get expired correctly")
 }
 
@@ -149,7 +165,7 @@ func TestExtendOnUse(t *testing.T) {
 	c.Purge()
 	future := make(chan bool)
 	close(future)
-	c.data["test"] = &cacheItem{cache: c, future: future, ttl: 10 * time.Second, created: time.Now().Add(-75 * time.Second), lastUsed: time.Now(), val: "A"}
+	c.data["test"] = &cacheItem{future: future, ttl: 10 * time.Second, created: time.Now().Add(-75 * time.Second), lastUsed: time.Now(), val: "A"}
 	expectCacheValue(t, c, "test", 100*time.Second, "B", "A", "Key was expired despite being used")
 }
 
@@ -176,8 +192,8 @@ func TestExpiredPurge(t *testing.T) {
 	c.Purge()
 	future := make(chan bool)
 	close(future)
-	c.data["test"] = &cacheItem{cache: c, future: future, ttl: 10 * time.Second, created: time.Now().Add(-75 * time.Second), val: "A"}
-	if !c.data["test"].expired() {
+	c.data["test"] = &cacheItem{future: future, ttl: 10 * time.Second, created: time.Now().Add(-75 * time.Second), val: "A"}
+	if !c.expired(c.data["test"]) {
 		t.Fatal("Expired cacheItem did not properly indicate expired()")
 	}
 	c.Purge()
@@ -207,5 +223,19 @@ func TestSelfReferentialStore(t *testing.T) {
 	})()
 	if val != s {
 		t.Fatal("Self-referential value not stored")
+	}
+}
+
+func TestLongCacheOps(t *testing.T) {
+	c := &Cache{MaxStorage: 100000, MaxSize: 100000}
+	c.Purge()
+	for i := 0; i < 1000; i++ {
+		c.Get(rand.Int(), 10*time.Second, func(arg3 interface{}) (interface{}, error) {
+			if rand.Int31n(10) == 0 {
+				return make([]byte, rand.Int31n(1000)), errors.New("Ayy")
+			}
+			return make([]byte, rand.Int31n(1000)), nil
+		})
+		expectConsistentCacheSize(t, c)
 	}
 }
