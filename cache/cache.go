@@ -52,7 +52,7 @@ type Cache struct {
 }
 
 func (c *Cache) prune() {
-	for len(c.data) >= c.MaxSize || (c.MaxStorage != 0 && c.storage > c.MaxStorage) {
+	for len(c.data) > 0 && (len(c.data) >= c.MaxSize || (c.MaxStorage != 0 && c.storage > c.MaxStorage)) {
 		checked := 0
 		var candidateKey interface{}
 		for k, v := range c.data {
@@ -229,7 +229,7 @@ func (c *Cache) PurgeCount(count int) {
 
 // Clear removes all items from the cache.
 func (c *Cache) Clear() {
-	c.lockMap()
+	c.mutex.Lock()
 	defer c.mutex.Unlock()
 	c.data = nil
 	c.storage = 0

@@ -239,3 +239,8 @@ func TestLongCacheOps(t *testing.T) {
 		expectConsistentCacheSize(t, c)
 	}
 }
+
+func TestFuzz00000(t *testing.T) {
+	Fuzz([]byte(""))
+	Fuzz([]byte("AOIFuhiu9fgh39840hff"))
+}
