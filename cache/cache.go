@@ -21,8 +21,8 @@ type cacheItem struct {
 	ttl      time.Duration
 	val      interface{}
 	err      error
-	future   <-chan bool
-	refresh  <-chan bool
+	future   *sync.WaitGroup
+	refresh  *sync.WaitGroup
 	size     uint64
 }
 
@@ -80,7 +80,7 @@ func (c *Cache) remove(candidateKey interface{}) {
 	delete(c.data, candidateKey)
 }
 
-func (c *Cache) generateItem(key interface{}, item *cacheItem, generate func(interface{}) (interface{}, error), future chan bool) {
+func (c *Cache) generateItem(key interface{}, item *cacheItem, generate func(interface{}) (interface{}, error), future *sync.WaitGroup) {
 	var val interface{}
 	var err error
 	func() {
@@ -96,7 +96,7 @@ func (c *Cache) generateItem(key interface{}, item *cacheItem, generate func(int
 
 	}()
 	var size uint64
-	if val != nil {
+	if val != nil && c.MaxStorage > 0 {
 		func() {
 			defer func() {
 				recover()
@@ -121,7 +121,7 @@ func (c *Cache) generateItem(key interface{}, item *cacheItem, generate func(int
 	}
 	item.created = time.Now()
 	item.refresh = nil // Clear out a refresh channel if there is one
-	close(future)
+	future.Done()
 }
 
 func (c *Cache) lockMap() {
@@ -146,19 +146,20 @@ func (c *Cache) Get(key interface{}, ttl time.Duration, generate func(interface{
 	c.lockMap()
 	item, ok := c.data[key]
 	if !ok {
-		future := make(chan bool)
-		item = &cacheItem{val: nil, future: future, ttl: ttl}
+		var future sync.WaitGroup
+		future.Add(1)
+		item = &cacheItem{val: nil, future: &future, ttl: ttl}
 		c.prune()
 		c.data[key] = item
-		go c.generateItem(key, item, generate, future)
+		go c.generateItem(key, item, generate, &future)
 	}
 	future := item.future
 	c.mutex.Unlock()
 	var result interface{}
 	var resErr error
-	resultWait := make(chan bool)
+	resultWait := make(chan struct{})
 	go func() {
-		<-future
+		future.Wait()
 		c.lockMap()
 		if c.expired(item) {
 			if item.future != nil { // The item hasn't already been destroyed
@@ -176,9 +177,10 @@ func (c *Cache) Get(key interface{}, ttl time.Duration, generate func(interface{
 		}
 		defer c.mutex.Unlock()
 		if c.shouldRefresh(item) && item.refresh == nil {
-			refresh := make(chan bool)
-			item.refresh = refresh
-			go c.generateItem(key, item, generate, refresh)
+			var refresh sync.WaitGroup
+			refresh.Add(1)
+			item.refresh = &refresh
+			go c.generateItem(key, item, generate, &refresh)
 		}
 		item.ttl = ttl
 		item.lastUsed = time.Now()
@@ -187,11 +189,13 @@ func (c *Cache) Get(key interface{}, ttl time.Duration, generate func(interface{
 	}()
 	c.PurgeCount(5)
 	return func() (interface{}, error) {
+		after := acquireTimer(c.GetTimeout)
+		defer releaseTimer(after)
 		if c.GetTimeout != 0 {
 			select {
 			case <-resultWait:
 				return result, resErr
-			case <-time.After(c.GetTimeout):
+			case <-after.C:
 				return nil, errors.New("Generation timed out")
 			}
 		}

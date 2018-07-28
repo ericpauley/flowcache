@@ -132,9 +132,8 @@ func TestPruneLimit(t *testing.T) {
 func TestRefresh(t *testing.T) {
 	c := &Cache{MaxSize: 1, Refresh: true}
 	c.Purge()
-	future := make(chan bool)
-	close(future)
-	c.data["test"] = &cacheItem{future: future, ttl: 100 * time.Second, created: time.Now().Add(-75 * time.Second), val: "A"}
+	var future sync.WaitGroup
+	c.data["test"] = &cacheItem{future: &future, ttl: 100 * time.Second, created: time.Now().Add(-75 * time.Second), val: "A"}
 	expectCacheValue(t, c, "test", 100*time.Second, "B", "A", "Cache item was not present")
 	time.Sleep(1 * time.Millisecond)
 	expectCacheValue(t, c, "test", 100*time.Second, "C", "B", "Cache item was not updated")
@@ -154,18 +153,16 @@ func TestErrorPropogation(t *testing.T) {
 func TestExpiredRefetch(t *testing.T) {
 	c := &Cache{MaxSize: 1}
 	c.Purge()
-	future := make(chan bool)
-	close(future)
-	c.data["test"] = &cacheItem{future: future, ttl: 10 * time.Second, created: time.Now().Add(-75 * time.Second), val: "A"}
+	var future sync.WaitGroup
+	c.data["test"] = &cacheItem{future: &future, ttl: 10 * time.Second, created: time.Now().Add(-75 * time.Second), val: "A"}
 	expectCacheValue(t, c, "test", 100*time.Second, "B", "B", "Old key did not get expired correctly")
 }
 
 func TestExtendOnUse(t *testing.T) {
 	c := &Cache{MaxSize: 1, ExtendOnUse: true}
 	c.Purge()
-	future := make(chan bool)
-	close(future)
-	c.data["test"] = &cacheItem{future: future, ttl: 10 * time.Second, created: time.Now().Add(-75 * time.Second), lastUsed: time.Now(), val: "A"}
+	var future sync.WaitGroup
+	c.data["test"] = &cacheItem{future: &future, ttl: 10 * time.Second, created: time.Now().Add(-75 * time.Second), lastUsed: time.Now(), val: "A"}
 	expectCacheValue(t, c, "test", 100*time.Second, "B", "A", "Key was expired despite being used")
 }
 
@@ -190,9 +187,8 @@ func TestTimeout(t *testing.T) {
 func TestExpiredPurge(t *testing.T) {
 	c := &Cache{MaxSize: 1}
 	c.Purge()
-	future := make(chan bool)
-	close(future)
-	c.data["test"] = &cacheItem{future: future, ttl: 10 * time.Second, created: time.Now().Add(-75 * time.Second), val: "A"}
+	var future sync.WaitGroup
+	c.data["test"] = &cacheItem{future: &future, ttl: 10 * time.Second, created: time.Now().Add(-75 * time.Second), val: "A"}
 	if !c.expired(c.data["test"]) {
 		t.Fatal("Expired cacheItem did not properly indicate expired()")
 	}
